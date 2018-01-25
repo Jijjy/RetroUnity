@@ -17,27 +17,22 @@
  *  If not, see <http://www.gnu.org/licenses/>.
  */
 
+using RetroUnity.Utility;
+using RetroUnity.Utility.Rendering;
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
-using RetroUnity.Utility;
 using UnityEngine;
 
-namespace RetroUnity {
-    public class LibretroWrapper : MonoBehaviour {
-    
-        private static Speaker _speaker;
+namespace RetroUnity
+{
+    public static class LibretroWrapper
+    {
+        private static Speaker Speaker;
+        public static Texture2D Texture;
 
-        public static Texture2D tex;
-        public static int pix;
-        public static int w;
-        public static int h;
-        public static int p;
-
-        public static byte[] Src;
-        public static byte[] Dst;
-    
-        public enum PixelFormat {
+        public enum PixelFormat
+        {
             // 0RGB1555, native endian. 0 bit must be set to 0.
             // This pixel format is default for compatibility concerns only.
             // If a 15/16-bit pixel format is desired, consider using RGB565.
@@ -55,27 +50,16 @@ namespace RetroUnity {
             RetroPixelFormatUnknown = int.MaxValue
         }
 
-        private void Start() {
-            _speaker = GameObject.Find("Speaker").GetComponent<Speaker>();
-        }
-
-        //Shouldn't be part of the wrapper, will remove later
         [StructLayout(LayoutKind.Sequential)]
-        public class Pixel {
-            public float Alpha;
-            public float Red;
-            public float Green;
-            public float Blue;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct SystemAVInfo {
+        public struct SystemAVInfo
+        {
             public Geometry geometry;
             public Timing timing;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        public unsafe struct GameInfo {
+        public unsafe struct GameInfo
+        {
             public char* path;
             public void* data;
             public uint size;
@@ -83,7 +67,8 @@ namespace RetroUnity {
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct Geometry {
+        public struct Geometry
+        {
             public uint base_width;
             public uint base_height;
             public uint max_width;
@@ -92,13 +77,15 @@ namespace RetroUnity {
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct Timing {
+        public struct Timing
+        {
             public double fps;
             public double sample_rate;
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        public unsafe struct SystemInfo {
+        public unsafe struct SystemInfo
+        {
 
             public char* library_name;
             public char* library_version;
@@ -111,7 +98,8 @@ namespace RetroUnity {
             public bool block_extract;
         }
 
-        public class Environment {
+        public class Environment
+        {
             public const uint RetroEnvironmentSetRotation = 1;
             public const uint RetroEnvironmentGetOverscan = 2;
             public const uint RetroEnvironmentGetCanDupe = 3;
@@ -126,20 +114,14 @@ namespace RetroUnity {
             public const uint RetroEnvironmentSetKeyboardCallback = 12;
         }
 
-        public class Wrapper {
+        public class Wrapper
+        {
             public const int AudioBatchSize = 4096;
             public static float[] AudioBatch = new float[AudioBatchSize];
             public static int BatchPosition;
-            private PixelFormat _pixelFormat;
+            private IRenderPixels _renderer;
             private bool _requiresFullPath;
             private SystemAVInfo _av;
-            private Pixel[] _frameBuffer;
-            public static int Pix = 0;
-            public static int w = 0;
-            public static int h = 0;
-            public static int p = 0;
-            public static uint Button;
-            public static uint Keep;
 
             //Prevent GC on delegates as long as the wrapper is running
             private Libretro.RetroEnvironmentDelegate _environment;
@@ -148,11 +130,16 @@ namespace RetroUnity {
             private Libretro.RetroAudioSampleBatchDelegate _audioSampleBatch;
             private Libretro.RetroInputPollDelegate _inputPoll;
             private Libretro.RetroInputStateDelegate _inputState;
-            public Wrapper(string coreToLoad) {
-                Libretro.InitializeLibrary(coreToLoad);
+
+            public Wrapper(string corePath, Material material, Speaker speaker)
+            {
+                Libretro.InitializeLibrary(corePath);
+                Texture = material.mainTexture as Texture2D;
+                Speaker = speaker;
             }
 
-            public unsafe void Init() {
+            public unsafe void Init()
+            {
                 int apiVersion = Libretro.RetroApiVersion();
                 SystemInfo info = new SystemInfo();
                 Libretro.RetroGetSystemInfo(ref info);
@@ -190,147 +177,38 @@ namespace RetroUnity {
                 Libretro.RetroInit();
             }
 
-            public bool Update() {
+            public bool Update()
+            {
                 Libretro.RetroRun();
                 return true;
             }
 
-            public SystemAVInfo GetAVInfo() {
+            public SystemAVInfo GetAVInfo()
+            {
                 return _av;
             }
 
-            public Pixel[] GetFramebuffer() {
-                return _frameBuffer;
+            private unsafe void RetroVideoRefresh(void* data, uint width, uint height, uint pitch)
+            {
+                _renderer.Render(ref Texture, (IntPtr)data, width, height, pitch);
             }
 
-            private unsafe void RetroVideoRefresh(void* data, uint width, uint height, uint pitch) {
-
-                // Process Pixels one by one for now...this is not the best way to do it 
-                // should be using memory streams or something
-
-                //Declare the pixel buffer to pass on to the renderer
-                if(_frameBuffer == null || _frameBuffer.Length != width * height)
-                    _frameBuffer = new Pixel[width * height];
-
-                //Get the array from unmanaged memory as a pointer
-                var pixels = (IntPtr)data;
-                //Gets The pointer to the row start to use with the pitch
-                //IntPtr rowStart = pixels;
-
-                //Get the size to move the pointer
-                //int size = 0;
-
-                uint i;
-                uint j;
-
-                switch (_pixelFormat) {
-                    case PixelFormat.RetroPixelFormat_0RGB1555:
-
-                        LibretroWrapper.w = Convert.ToInt32(width);
-                        LibretroWrapper.h = Convert.ToInt32(height);
-                        if (tex == null) {
-                            tex = new Texture2D(LibretroWrapper.w, LibretroWrapper.h, TextureFormat.RGB565, false);
-                        }
-                        LibretroWrapper.p = Convert.ToInt32(pitch);
-
-                        //size = Marshal.SizeOf(typeof(short));
-                        for (i = 0; i < height; i++) {
-                            for (j = 0; j < width; j++) {
-                                short packed = Marshal.ReadInt16(pixels);
-                                _frameBuffer[i * width + j] = new Pixel {
-                                    Alpha = 1
-                                    ,
-                                    Red = ((packed >> 10) & 0x001F) / 31.0f
-                                    ,
-                                    Green = ((packed >> 5) & 0x001F) / 31.0f
-                                    ,
-                                    Blue = (packed & 0x001F) / 31.0f
-                                };
-                                var color = new Color(((packed >> 10) & 0x001F) / 31.0f, ((packed >> 5) & 0x001F) / 31.0f, (packed & 0x001F) / 31.0f, 1.0f);
-                                tex.SetPixel((int)i, (int)j, color);
-                                //pixels = (IntPtr)((int)pixels + size);
-                            }
-                            tex.filterMode = FilterMode.Trilinear;
-                            tex.Apply();
-                            //pixels = (IntPtr)((int)rowStart + pitch);
-                            //rowStart = pixels;
-                        }
-                        break;
-                    case PixelFormat.RetroPixelFormatXRGB8888:
-
-                        LibretroWrapper.w = Convert.ToInt32(width);
-                        LibretroWrapper.h = Convert.ToInt32(height);
-                        if (tex == null) {
-                            tex = new Texture2D(LibretroWrapper.w, LibretroWrapper.h, TextureFormat.RGB565, false);
-                        }
-                        LibretroWrapper.p = Convert.ToInt32(pitch);
-
-                        //size = Marshal.SizeOf(typeof(int));
-                        for (i = 0; i < height; i++) {
-                            for (j = 0; j < width; j++) {
-                                int packed = Marshal.ReadInt32(pixels);
-                                _frameBuffer[i * width + j] = new Pixel {
-                                    Alpha = 1,
-                                    Red = ((packed >> 16) & 0x00FF) / 255.0f,
-                                    Green = ((packed >> 8) & 0x00FF) / 255.0f,
-                                    Blue = (packed & 0x00FF) / 255.0f
-                                };
-                                var color = new Color(((packed >> 16) & 0x00FF) / 255.0f, ((packed >> 8) & 0x00FF) / 255.0f, (packed & 0x00FF) / 255.0f, 1.0f);
-                                tex.SetPixel((int)i, (int)j, color);
-                                //pixels = (IntPtr)((int)pixels + size);
-                            }
-                            //pixels = (IntPtr)((int)rowStart + pitch);
-                            //rowStart = pixels;
-
-                        }
-
-                        tex.filterMode = FilterMode.Trilinear;
-                        tex.Apply();
-                        break;
-
-                    case PixelFormat.RetroPixelFormatRGB565:
-
-                        var imagedata565 = new IntPtr(data);
-                        LibretroWrapper.w = Convert.ToInt32(width);
-                        LibretroWrapper.h = Convert.ToInt32(height);
-                        if (tex == null) {
-                            tex = new Texture2D(LibretroWrapper.w, LibretroWrapper.h, TextureFormat.RGB565, false);
-                        }
-                        LibretroWrapper.p = Convert.ToInt32(pitch);
-                        int srcsize565 = 2 * (LibretroWrapper.p * LibretroWrapper.h);
-                        int dstsize565 = 2 * (LibretroWrapper.w * LibretroWrapper.h);
-                        if (Src == null || Src.Length != srcsize565)
-                            Src = new byte[srcsize565];
-                        if (Dst == null || Dst.Length != dstsize565)
-                            Dst = new byte[dstsize565];
-                        Marshal.Copy(imagedata565, Src, 0, srcsize565);
-                        int m565 = 0;
-                        for (int y = 0; y < LibretroWrapper.h; y++) {
-                            for (int k = 0 * 2 + y * LibretroWrapper.p; k < LibretroWrapper.w * 2 + y * LibretroWrapper.p; k++) {
-                                Dst[m565] = Src[k];
-                                m565++;
-                            }
-                        }
-                        tex.LoadRawTextureData(Dst);
-                        tex.filterMode = FilterMode.Trilinear;
-                        tex.Apply();
-                        break;
-                    case PixelFormat.RetroPixelFormatUnknown:
-                        _frameBuffer = null;
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException();
-                }
-            }
-
-            private void RetroAudioSample(short left, short right) {
+            private void RetroAudioSample(short left, short right)
+            {
                 // Unused.
             }
-        
-            private unsafe void RetroAudioSampleBatch(short* data, uint frames) {
-                for (int i = 0; i < (int) frames; i++) {
-                    short chunk = Marshal.ReadInt16((IntPtr) data);
-                    data += sizeof (short); // Set pointer to next chunk.
+
+            private unsafe void RetroAudioSampleBatch(short* data, uint frames)
+            {
+                if (Speaker == null)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < (int)frames; i++)
+                {
+                    short chunk = Marshal.ReadInt16((IntPtr)data);
+                    data += sizeof(short); // Set pointer to next chunk.
                     float value = chunk / 32768f; // Divide by Int16 max to get correct float value.
                     value = Mathf.Clamp(value, -1.0f, 1.0f); // Unity's audio only takes values between -1 and 1.
 
@@ -338,57 +216,63 @@ namespace RetroUnity {
                     BatchPosition++;
 
                     // When the batch is filled send it to the speakers.
-                    if (BatchPosition >= AudioBatchSize - 1) {
-                        _speaker.UpdateAudio(AudioBatch);
+                    if (BatchPosition >= AudioBatchSize - 1)
+                    {
+                        Speaker.UpdateAudio(AudioBatch);
                         BatchPosition = 0;
                     }
                 }
             }
 
-            private void RetroInputPoll() {
+            private void RetroInputPoll()
+            {
             }
 
-            public static short RetroInputState(uint port, uint device, uint index, uint id) {
-                switch (id) {
+            public static short RetroInputState(uint port, uint device, uint index, uint id)
+            {
+                switch (id)
+                {
                     case 0:
-                        return Input.GetKey(KeyCode.Z) || Input.GetButton("B") ? (short) 1 : (short) 0; // B
+                        return Input.GetKey(KeyCode.Z) || Input.GetButton("B") ? (short)1 : (short)0; // B
                     case 1:
-                        return Input.GetKey(KeyCode.A) || Input.GetButton("Y") ? (short) 1 : (short) 0; // Y
+                        return Input.GetKey(KeyCode.A) || Input.GetButton("Y") ? (short)1 : (short)0; // Y
                     case 2:
-                        return Input.GetKey(KeyCode.Space) || Input.GetButton("SELECT") ? (short) 1 : (short) 0; // SELECT
+                        return Input.GetKey(KeyCode.Space) || Input.GetButton("SELECT") ? (short)1 : (short)0; // SELECT
                     case 3:
-                        return Input.GetKey(KeyCode.Return) || Input.GetButton("START") ? (short) 1 : (short) 0; // START
+                        return Input.GetKey(KeyCode.Return) || Input.GetButton("START") ? (short)1 : (short)0; // START
                     case 4:
-                        return Input.GetKey(KeyCode.UpArrow) || Input.GetAxisRaw("DpadX") >= 1.0f ? (short) 1 : (short) 0; // UP
+                        return Input.GetKey(KeyCode.UpArrow) || Input.GetAxisRaw("DpadX") >= 1.0f ? (short)1 : (short)0; // UP
                     case 5:
-                        return Input.GetKey(KeyCode.DownArrow) || Input.GetAxisRaw("DpadX") <= -1.0f ? (short) 1 : (short) 0; // DOWN
+                        return Input.GetKey(KeyCode.DownArrow) || Input.GetAxisRaw("DpadX") <= -1.0f ? (short)1 : (short)0; // DOWN
                     case 6:
-                        return Input.GetKey(KeyCode.LeftArrow) || Input.GetAxisRaw("DpadY") <= -1.0f ? (short) 1 : (short) 0; // LEFT
+                        return Input.GetKey(KeyCode.LeftArrow) || Input.GetAxisRaw("DpadY") <= -1.0f ? (short)1 : (short)0; // LEFT
                     case 7:
-                        return Input.GetKey(KeyCode.RightArrow) || Input.GetAxisRaw("DpadY") >= 1.0f ? (short) 1 : (short) 0; // RIGHT
+                        return Input.GetKey(KeyCode.RightArrow) || Input.GetAxisRaw("DpadY") >= 1.0f ? (short)1 : (short)0; // RIGHT
                     case 8:
-                        return Input.GetKey(KeyCode.X) || Input.GetButton("A") ? (short) 1 : (short) 0; // A
+                        return Input.GetKey(KeyCode.X) || Input.GetButton("A") ? (short)1 : (short)0; // A
                     case 9:
-                        return Input.GetKey(KeyCode.S) || Input.GetButton("X") ? (short) 1 : (short) 0; // X
+                        return Input.GetKey(KeyCode.S) || Input.GetButton("X") ? (short)1 : (short)0; // X
                     case 10:
-                        return Input.GetKey(KeyCode.Q) || Input.GetButton("L") ? (short) 1 : (short) 0; // L
+                        return Input.GetKey(KeyCode.Q) || Input.GetButton("L") ? (short)1 : (short)0; // L
                     case 11:
-                        return Input.GetKey(KeyCode.W) || Input.GetButton("R") ? (short) 1 : (short) 0; // R
+                        return Input.GetKey(KeyCode.W) || Input.GetButton("R") ? (short)1 : (short)0; // R
                     case 12:
-                        return Input.GetKey(KeyCode.E) ? (short) 1 : (short) 0;
+                        return Input.GetKey(KeyCode.E) ? (short)1 : (short)0;
                     case 13:
-                        return Input.GetKey(KeyCode.R) ? (short) 1 : (short) 0;
+                        return Input.GetKey(KeyCode.R) ? (short)1 : (short)0;
                     case 14:
-                        return Input.GetKey(KeyCode.T) ? (short) 1 : (short) 0;
+                        return Input.GetKey(KeyCode.T) ? (short)1 : (short)0;
                     case 15:
-                        return Input.GetKey(KeyCode.Y) ? (short) 1 : (short) 0;
+                        return Input.GetKey(KeyCode.Y) ? (short)1 : (short)0;
                     default:
                         return 0;
                 }
             }
 
-            private unsafe bool RetroEnvironment(uint cmd, void* data) {
-                switch (cmd) {
+            private unsafe bool RetroEnvironment(uint cmd, void* data)
+            {
+                switch (cmd)
+                {
                     case Environment.RetroEnvironmentGetOverscan:
                         break;
                     case Environment.RetroEnvironmentGetVariable:
@@ -406,15 +290,23 @@ namespace RetroUnity {
                     case Environment.RetroEnvironmentGetSystemDirectory:
                         break;
                     case Environment.RetroEnvironmentSetPixelFormat:
-                        _pixelFormat = *(PixelFormat*) data;
-                        switch (_pixelFormat) {
+                        var format = *(PixelFormat*)data;
+                        Debug.Log("Pixel Format: " + format.ToString());
+                        switch (format)
+                        {
                             case PixelFormat.RetroPixelFormat_0RGB1555:
+                                //  throw new NotImplementedException();
+                                _renderer = new RenderRetroPixelFormat_0RGB1555();
                                 break;
                             case PixelFormat.RetroPixelFormatRGB565:
+                                _renderer = new RenderRetroPixelFormatRGB565();
                                 break;
                             case PixelFormat.RetroPixelFormatXRGB8888:
+                                //  throw new NotImplementedException();
+                                _renderer = new RenderRetroPixelFormatXRGB8888();
                                 break;
                             case PixelFormat.RetroPixelFormatUnknown:
+                                _renderer = null;
                                 break;
                         }
                         break;
@@ -428,24 +320,26 @@ namespace RetroUnity {
                 return true;
             }
 
-            private static unsafe char* StringToChar(string s) {
+            private static unsafe char* StringToChar(string s)
+            {
                 IntPtr p = Marshal.StringToHGlobalUni(s);
-                return (char*) p.ToPointer();
+                return (char*)p.ToPointer();
             }
 
-            private unsafe GameInfo LoadGameInfo(string file) {
+            private unsafe GameInfo LoadGameInfo(string file)
+            {
                 var gameInfo = new GameInfo();
 
                 var stream = new FileStream(file, FileMode.Open);
 
                 var data = new byte[stream.Length];
-                stream.Read(data, 0, (int) stream.Length);
-                IntPtr arrayPointer = Marshal.AllocHGlobal(data.Length*Marshal.SizeOf(typeof (byte)));
+                stream.Read(data, 0, (int)stream.Length);
+                IntPtr arrayPointer = Marshal.AllocHGlobal(data.Length * Marshal.SizeOf(typeof(byte)));
                 Marshal.Copy(data, 0, arrayPointer, data.Length);
 
 
                 gameInfo.path = StringToChar(file);
-                gameInfo.size = (uint) data.Length;
+                gameInfo.size = (uint)data.Length;
                 gameInfo.data = arrayPointer.ToPointer();
 
                 stream.Close();
@@ -453,7 +347,8 @@ namespace RetroUnity {
                 return gameInfo;
             }
 
-            public bool LoadGame(string gamePath) {
+            public bool LoadGame(string gamePath)
+            {
                 GameInfo gameInfo = LoadGameInfo(gamePath);
                 bool ret = Libretro.RetroLoadGame(ref gameInfo);
 
@@ -475,7 +370,9 @@ namespace RetroUnity {
             }
         }
 
-        public unsafe class Libretro {
+        public unsafe class Libretro
+        {
+            #region Delegates
             [UnmanagedFunctionPointer(CallingConvention.StdCall)]
             public delegate int RetroApiVersionDelegate();
 
@@ -559,13 +456,18 @@ namespace RetroUnity {
             //typedef bool (*retro_environment_t)(unsigned cmd, void *data);
             public delegate bool RetroEnvironmentDelegate(uint cmd, void* data);
 
-            public static void InitializeLibrary(string dllName) {
+            #endregion
+
+            public static void InitializeLibrary(string dllName)
+            {
                 IDLLHandler dllHandler = null;
+
 #if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
                 dllHandler = WindowsDLLHandler.Instance;
 #elif UNITY_ANDROID
-            dllHandler = AndroidDLLHandler.Instance;
+                dllHandler = AndroidDLLHandler.Instance;
 #endif
+
                 if (dllHandler == null) return;
                 dllHandler.LoadCore(dllName);
 

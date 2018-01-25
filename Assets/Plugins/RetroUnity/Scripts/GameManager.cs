@@ -1,27 +1,35 @@
-﻿using System.IO;
-using RetroUnity.Utility;
+﻿using RetroUnity.Utility;
+using System.IO;
 using UnityEngine;
 
-namespace RetroUnity {
-    public class GameManager : MonoBehaviour {
+namespace RetroUnity
+{
+    public class GameManager : MonoBehaviour
+    {
 
-        private const string CoreName = "snes9x_libretro.dll";
-        private const string RomName = "Chrono Trigger (USA).sfc";
+        public string CoreName = "snes9x_libretro.dll";
+        public string RomName = "Super Mario World (U) [!].smc";
         private LibretroWrapper.Wrapper wrapper;
 
         public Renderer Display;
 
-        private void Start() {
+        private void Start()
+        {
             Application.targetFrameRate = 60;
             LoadRom(Application.streamingAssetsPath + "/" + RomName);
         }
 
-        private void Update() {
-            if (wrapper != null) {
+        private void Update()
+        {
+
+            if (wrapper != null)
+            {
                 wrapper.Update();
             }
-            if (LibretroWrapper.tex != null) {
-                Display.material.mainTexture = LibretroWrapper.tex;
+
+            if (LibretroWrapper.Texture != null)
+            {
+                Display.material.mainTexture = LibretroWrapper.Texture;
             }
 
             // debug input
@@ -40,25 +48,30 @@ namespace RetroUnity {
 
         }
 
-        public void LoadRom(string path) {
+        public void LoadRom(string path)
+        {
 #if !UNITY_ANDROID || UNITY_EDITOR
             // Doesn't work on Android because you can't do File.Exists in StreamingAssets folder.
             // Should figure out a different way to perform check later.
             // If the file doesn't exist the application gets stuck in a loop.
-            if (!File.Exists(path)) {
+            if (!File.Exists(path))
+            {
                 Debug.LogError(path + " not found.");
                 return;
             }
 #endif
             Display.material.color = Color.white;
 
-            wrapper = new LibretroWrapper.Wrapper(Application.streamingAssetsPath + "/" + CoreName);
+            wrapper = new LibretroWrapper.Wrapper(Application.streamingAssetsPath + "/" + CoreName,
+                Display.material,
+                GameObject.Find("Speaker").GetComponent<Speaker>());
 
             wrapper.Init();
             wrapper.LoadGame(path);
         }
 
-        private void OnDestroy() {
+        private void OnDestroy()
+        {
             WindowsDLLHandler.Instance.UnloadCore();
         }
     }

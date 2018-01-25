@@ -2,11 +2,13 @@
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-namespace RetroUnity.Utility {
+namespace RetroUnity.Utility
+{
     /// <summary>
     /// Windows specific implementation for handling DLL loading. Requires kernel32.dll.
     /// </summary>
-    public sealed class WindowsDLLHandler : IDLLHandler {
+    public sealed class WindowsDLLHandler : IDLLHandler
+    {
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr LoadLibrary(string dllToLoad);
@@ -27,7 +29,8 @@ namespace RetroUnity.Utility {
         /// <summary>
         /// Prevent 'new' keyword.
         /// </summary>
-        private WindowsDLLHandler() {
+        private WindowsDLLHandler()
+        {
         }
 
         /// <summary>
@@ -44,31 +47,41 @@ namespace RetroUnity.Utility {
             }
         }
 
-        public bool LoadCore(string dllPath) {
-            _dllPointer = LoadLibrary(dllPath);
+        private static object _lock = new object();
+        public bool LoadCore(string dllPath)
+        {
+            lock (_lock)
+            {
+                _dllPointer = LoadLibrary(dllPath);
+            }
 
-            if (_dllPointer == IntPtr.Zero) {
+            if (_dllPointer == IntPtr.Zero)
+            {
                 int errorCode = Marshal.GetLastWin32Error();
-                Debug.LogErrorFormat("Failed to load library (ErrorCode: {0})", errorCode);
+                Debug.LogErrorFormat("Failed to load library (ErrorCode: {0}) - '{1}'", errorCode, dllPath);
                 return false;
             }
 
             return true;
         }
 
-        public void UnloadCore() {
+        public void UnloadCore()
+        {
             FreeLibrary(_dllPointer);
         }
 
-        public T GetMethod<T>(string functionName) where T : class {
-            if (_dllPointer == IntPtr.Zero) {
+        public T GetMethod<T>(string functionName) where T : class
+        {
+            if (_dllPointer == IntPtr.Zero)
+            {
                 Debug.LogError("DLL not found, cannot get method '" + functionName + "'");
                 return default(T);
             }
 
             IntPtr pAddressOfFunctionToCall = GetProcAddress(_dllPointer, functionName);
 
-            if (pAddressOfFunctionToCall == IntPtr.Zero) {
+            if (pAddressOfFunctionToCall == IntPtr.Zero)
+            {
                 Debug.LogError("Address for function " + functionName + " not found.");
                 return default(T);
             }
